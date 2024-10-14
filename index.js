@@ -3,9 +3,22 @@ const { createCanvas, loadImage } = require('canvas');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const session = require('express-session');
+
 const app = express();
 const PORT = 3000;
 
+// Generate a secure session secret
+const sessionSecret = crypto.randomBytes(64).toString('hex');
+
+app.use(session({
+    secret: sessionSecret,
+    resave: false,
+    saveUninitialized: true,
+}));
+
+// Middleware for parsing form data
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -16,6 +29,105 @@ if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+// Store user profiles in memory
+const userProfiles = {};
+
+// Serve the login page
+app.get('/admin/login', (req, res) => {
+    res.send(`
+        <h1>Admin Login</h1>
+        <form action="/admin/login" method="POST">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" required><br>
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required><br>
+            <button type="submit">Login</button>
+        </form>
+    `);
+});
+
+// Handle login
+app.post('/admin/login', (req, res) => {
+    const { username, password } = req.body;
+
+    // Check credentials (consider using hashed passwords in a real application)
+    if (username === 'Saumya' && password === 'Admin@911') {
+        req.session.isAuthenticated = true; // Set authentication status
+        return res.redirect('/admin');
+    }
+
+    res.send('Invalid credentials. Please <a href="/admin/login">try again</a>.');
+});
+
+// Middleware to protect admin routes
+const isAuthenticated = (req, res, next) => {
+    if (req.session.isAuthenticated) {
+        return next();
+    }
+    res.redirect('/admin/login'); // Redirect to login if not authenticated
+};
+
+// Protect the admin route
+app.get('/admin', isAuthenticated, (req, res) => {
+    console.log('Admin Dashboard accessed. Current User Profiles:', userProfiles);
+    let userHtml = Object.keys(userProfiles).map(name => {
+        const profile = userProfiles[name];
+        return `
+            <div>
+                <h2>${name}</h2>
+                <p>Email: ${profile.email}</p>
+                <p>Designation: ${profile.designation}</p>
+                <p>KYC: ${profile.kycVerified ? 'Verified' : 'Unverified'}</p>
+                <p>Aadhar Card: <a href="${profile.aadharCard}" target="_blank">View</a></p>
+                <p>College ID: <a href="${profile.collegeId}" target="_blank">View</a></p>
+                <button onclick="toggleKYC('${name}')">${profile.kycVerified ? 'Unverify' : 'Verify'}</button>
+                <div>
+                ${imageLinks.map((link, index) => `
+                    <a href="javascript:void(0)" onclick="addImageToProfile('${name}', '${link}')">
+                        <button>Link ${index + 1}</button>
+                    </a>
+                `).join('')}                
+                </div>
+                <hr>
+            </div>
+        `;
+    }).join('');
+
+    res.send(`
+        <h1>Admin Dashboard</h1>
+        <div>${userHtml}</div>
+        <script>
+            function toggleKYC(name) {
+                fetch('/admin/toggleKYC', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                })
+                .then(response => location.reload());
+            }
+
+            function addImageToProfile(name, imageUrl) {
+                fetch('/admin/addImage', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, imageUrl })
+                })
+                .then(response => location.reload());
+            }
+        </script>
+    `);
+});
+
+// Logout route
+app.post('/admin/logout', (req, res) => {
+    req.session.destroy(err => {
+        if (err) {
+            return res.redirect('/admin');
+        }
+        res.redirect('/admin/login');
+    });
+});
+
 // Function to generate image with user's name
 const generateImageWithName = async (name, imageUrl) => {
     const image = await loadImage(imageUrl);
@@ -24,18 +136,12 @@ const generateImageWithName = async (name, imageUrl) => {
     const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
 
-    // Draw the image on the canvas
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    // Set text properties
     ctx.fillStyle = 'black';
     ctx.font = 'bold 28px Arial';
     ctx.textAlign = 'left';
-
-    // Draw the name onto the canvas
     ctx.fillText(name, 135, 490); // Adjust positioning as needed
 
-    // Create a buffer from the canvas
     return canvas.toBuffer('image/png');
 };
 
@@ -50,9 +156,6 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage: storage });
-
-// Store user profiles in memory
-const userProfiles = {};
 
 // Serve the form page
 app.get('/', (req, res) => {
@@ -87,59 +190,39 @@ app.post('/generate', upload.fields([
     { name: 'aadharCard', maxCount: 1 },
     { name: 'collegeId', maxCount: 1 }
 ]), async (req, res) => {
-    const { name, email, designation, dateOfJoining } = req.body;
-    const profilePicPath = req.files['profilePic'] ? `/uploads/${req.files['profilePic'][0].filename}` : null;
-    const aadharCardPath = req.files['aadharCard'] ? `/uploads/${req.files['aadharCard'][0].filename}` : null;
-    const collegeIdPath = req.files['collegeId'] ? `/uploads/${req.files['collegeId'][0].filename}` : null;
+    try {
+        const { name, email, designation, dateOfJoining } = req.body;
+        const profilePicPath = req.files['profilePic'] ? `/uploads/${req.files['profilePic'][0].filename}` : null;
+        const aadharCardPath = req.files['aadharCard'] ? `/uploads/${req.files['aadharCard'][0].filename}` : null;
+        const collegeIdPath = req.files['collegeId'] ? `/uploads/${req.files['collegeId'][0].filename}` : null;
 
-    // Image URL for the first offer letter image
-    const imageUrl = "https://i.ibb.co/3mh6YcJ/1.png";
+        const imageUrl = designation === 'HR' 
+            ? "https://i.ibb.co/3mh6YcJ/1.png" 
+            : "https://i.ibb.co/9p85HLv/MAREKTING-INTERNSHIP-OFFER-LETTER.png";
 
-    // Load the image to get its dimensions
-    const image = await loadImage(imageUrl);
-    const canvasWidth = image.width;
-    const canvasHeight = image.height;
-    const canvas = createCanvas(canvasWidth, canvasHeight);
-    const ctx = canvas.getContext('2d');
+        const buffer = await generateImageWithName(name, imageUrl);
 
-    // Draw the image on the canvas
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const base64Image = buffer.toString('base64');
+        const imgSrc = `data:image/png;base64,${base64Image}`;
 
-    // Set text properties
-    ctx.fillStyle = 'black';
-    ctx.font = 'bold 28px Arial';
-    ctx.textAlign = 'left';
+        userProfiles[name] = {
+            email,
+            designation,
+            dateOfJoining,
+            offerLetterImage: imgSrc,
+            profilePic: profilePicPath,
+            aadharCard: aadharCardPath,
+            collegeId: collegeIdPath,
+            kycVerified: false,
+            additionalImages: [] // Initialize additional images
+        };
 
-    // Draw the text onto the canvas
-    ctx.fillText(name, 135, 490);
-    ctx.fillText(email, 135, 530);
-    ctx.fillText(dateOfJoining, 1130, 490);
-
-    // Create a buffer from the canvas
-    const buffer = canvas.toBuffer('image/png');
-
-    // Create a base64 string to display the image in HTML
-    const base64Image = buffer.toString('base64');
-    const imgSrc = `data:image/png;base64,${base64Image}`;
-
-    // Store user profile with KYC status and uploaded file paths
-    userProfiles[name] = {
-        email,
-        designation,
-        dateOfJoining,
-        offerLetterImage: imgSrc,
-        profilePic: profilePicPath,
-        aadharCard: aadharCardPath, // Save Aadhar Card path
-        collegeId: collegeIdPath, // Save College ID path
-        kycVerified: false // Default KYC status
-    };
-    
-    // Log the user profile creation
-    console.log(`Profile created for: ${name}`);
-    console.log('User Profiles:', userProfiles);
-    
-    // Redirect to the profile page
-    res.redirect(`/${name}`);
+        console.log(`Profile created for: ${name}`);
+        res.redirect(`/${name}`);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send('An error occurred while generating the offer letter.');
+    }
 });
 
 const imageLinks = [
