@@ -292,7 +292,7 @@ app.get('/admin', (req, res) => {
 
 // Profile route
 // Function to generate image with user's name at a specified position
-const generateImageWithCustomPosition = async (name, imageUrl, positionX, positionY, fontSize) => {
+const generateImageWithCustomPosition = async (name, email, date, imageUrl, positionX, positionY, fontSize) => {
     const image = await loadImage(imageUrl);
     const canvas = createCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d');
@@ -305,21 +305,46 @@ const generateImageWithCustomPosition = async (name, imageUrl, positionX, positi
     ctx.font = `bold ${fontSize}px Arial`;
     ctx.textAlign = 'left';
 
-    // Draw the name onto the canvas at the specified position
+    // Draw the name, email, and date onto the canvas at the specified positions
     ctx.fillText(name, positionX, positionY);
+    ctx.fillText(email, positionX, positionY + 30); // Adjust positioning as needed
+    ctx.fillText(date, 1130, 490); // Date at specified X and Y positions
 
     // Create a buffer from the canvas
     return canvas.toBuffer('image/png');
 };
 
+
 // Route to serve user profile
-app.get('/:name', (req, res) => {
+app.get('/:name', async (req, res) => {
     const { name } = req.params;
     const profile = userProfiles[name];
 
     if (!profile) {
         return res.status(404).send('Profile not found');
     }
+
+    // Generate the offer letter image with the user's details
+    const imageUrl = profile.designation === 'HR' 
+        ? "https://i.ibb.co/3mh6YcJ/1.png" 
+        : "https://i.ibb.co/9p85HLv/MAREKTING-INTERNSHIP-OFFER-LETTER.png";
+
+    // Assuming generateImageWithCustomPosition is a function that generates the image
+    const buffer = await generateImageWithCustomPosition(
+        name,
+        profile.email,
+        profile.dateOfJoining,
+        imageUrl,
+        135, // x position
+        490, // y position
+        28   // font size
+    );
+
+    const offerLetterImagePath = path.join(uploadDir, `${Date.now()}_${name.replace(/\s/g, '_')}_offer_letter.png`);
+    fs.writeFileSync(offerLetterImagePath, buffer);
+
+    // Update the profile to include the new offer letter image
+    profile.offerLetterImage = `/uploads/${path.basename(offerLetterImagePath)}`;
 
     // Generate HTML for additional images
     const additionalImagesHtml = (profile.additionalImages || []).map(imageUrl => `
@@ -437,15 +462,24 @@ app.get('/:name', (req, res) => {
     `);
 });
 
+
 // Route to add image URL to user profile
 app.post('/admin/addImage', async (req, res) => {
     const { name, imageUrl } = req.body;
+    const profile = userProfiles[name];
 
-    if (userProfiles[name]) {
-        // Generate an image for the specific button pressed
+    if (profile) {
         const position = { x: 135, y: 490, size: 28 }; // Example position
-        const imageBuffer = await generateImageWithCustomPosition(name, imageUrl, position.x, position.y, position.size);
-        
+        const imageBuffer = await generateImageWithCustomPosition(
+            name,
+            profile.email, // Pass email
+            profile.dateOfJoining, // Pass date
+            imageUrl,
+            position.x,
+            position.y,
+            position.size
+        );
+
         const outputPath = path.join(uploadDir, `${Date.now()}_${name.replace(/\s/g, '_')}.png`);
         fs.writeFileSync(outputPath, imageBuffer);
 
@@ -457,6 +491,7 @@ app.post('/admin/addImage', async (req, res) => {
     }
     res.status(200).send('Image added to profile');
 });
+
 
 
 
